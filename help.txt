@@ -1,0 +1,119 @@
+SEMEK QR APPLICATION: LOGIN ISSUE AND RECOVERY CHECKLIST
+========================================================
+
+CURRENT LOGIN ERROR
+-------------------
+The browser reports POST /api/auth/login -> 500 Internal Server Error.
+The server log identified the immediate cause:
+
+  The table public.AdminUser does not exist in the configured database.
+
+This is a database initialization/schema problem, not a bad-password error.
+When the database is initialized, an unknown email or wrong password should
+return 401 instead of 500.
+
+
+OTHER VERIFIED ISSUES
+---------------------
+1. Prisma CLI does not automatically load .env.local. The first db:push attempt
+   failed because DATABASE_URL was not present in the Prisma CLI environment.
+2. Prisma now uses DIRECT_URL for schema operations. Confirm both database URLs
+   point to the intended Supabase project before pushing the schema.
+3. NEXT_PUBLIC_API_URL is configured for port 3000. If Next.js starts on port
+   3001 because port 3000 is occupied, the browser may send API requests to the
+   other process on port 3000. Use the port shown by Next.js and keep
+   NEXT_PUBLIC_API_URL aligned with it, then restart the dev server.
+5. The code has weak development fallbacks for SESSION_SECRET and
+  QR_SIGNING_SECRET. Production must provide strong, independent values; the
+  app should not rely on those fallbacks in production.
+6. The app has placeholder defaults for support email, sender email, and phone
+  number. Replace them with verified company contact details before launch.
+7. No automated test script is defined in package.json. Typecheck, lint, and
+  build have passed, but database-backed login and physical-device camera use
+  still need end-to-end tests.
+8. Credentials and server-only keys were included in a shared environment-file
+   excerpt. Treat them as compromised and rotate them before further use.
+
+Previously found frontend lint errors and production prerender errors have been
+fixed. The production build passed after those fixes. The QR camera scanner was
+implemented, but still needs to be tested on a real phone/browser with camera
+permission and HTTPS (localhost is allowed for local testing).
+
+
+WHAT MUST BE ROTATED
+--------------------
+- Supabase database password; update DATABASE_URL and DIRECT_URL.
+- Supabase service/secret key. The publishable key is intended to be public.
+- Resend API key.
+- Cloudinary API secret (and rotate the API key too if the provider requests it).
+- Initial admin password; use a new unique password.
+- SESSION_SECRET and QR_SIGNING_SECRET; replace placeholder/weak values with
+  independent random values of at least 32 characters.
+- Update local environment values and deployment secrets. Do not paste new
+  values into chat, screenshots, logs, or source control.
+
+
+SAFE RECOVERY STEPS (RUN FROM THE PROJECT ROOT IN POWERSHELL)
+------------------------------------------------------------
+1. Rotate the keys above in their provider dashboards. Put the new values in
+   the ignored .env.local file. Verify that DATABASE_URL and DIRECT_URL refer
+   to the same intended Supabase project.
+
+2. Load only the values needed for the Prisma commands into this PowerShell
+   process, run the schema sync, then seed the admin. This does not print the
+   environment values. Do not accept a Prisma data-loss warning without
+   reviewing what it will remove.
+
+   $names = @('DATABASE_URL','DIRECT_URL','INITIAL_ADMIN_EMAIL','INITIAL_ADMIN_PASSWORD','INITIAL_ADMIN_NAME','QR_SIGNING_SECRET')
+   $previous = @{}
+   try {
+     foreach ($name in $names) {
+       $previous[$name] = [Environment]::GetEnvironmentVariable($name, 'Process')
+       $line = Get-Content '.env.local' | Where-Object { $_.StartsWith("$name=") } | Select-Object -First 1
+       if (-not $line) { throw "Missing $name in .env.local" }
+       $value = $line.Substring($name.Length + 1).Trim().Trim('"')
+       [Environment]::SetEnvironmentVariable($name, $value, 'Process')
+     }
+
+     npm run db:push
+     if ($LASTEXITCODE -ne 0) { throw 'Schema push failed. Keep the error output private of all connection strings and secrets.' }
+
+     npm run db:seed
+     if ($LASTEXITCODE -ne 0) { throw 'Database seed failed. Keep the error output private of all connection strings and secrets.' }
+   }
+   finally {
+     foreach ($name in $names) {
+       [Environment]::SetEnvironmentVariable($name, $previous[$name], 'Process')
+     }
+   }
+
+3. If the seed says the admin already exists, it will not change that user's
+   password. Use the project's approved admin-password reset process instead;
+   do not delete database records just to make login work.
+
+4. Start Next.js. If it reports port 3001, either stop the other app using 3000
+   or update NEXT_PUBLIC_APP_URL and NEXT_PUBLIC_API_URL to port 3001. Restart
+   Next.js after changing public environment variables.
+
+5. Open the exact local URL printed by Next.js, sign in with the current admin
+   email and newly rotated password, and check the response:
+   - 200: login succeeded.
+   - 401: database is reachable; verify the email/password or seed state.
+   - 500: capture the server-side error, but redact URLs, passwords, tokens,
+     keys, cookies, and personal data before sharing it.
+
+
+WHAT I NEED TO FINISH
+---------------------
+- Rotate the exposed credentials first; do not send me the replacement values.
+- Run the PowerShell recovery block above from the project directory.
+- Share only whether db:push and db:seed succeeded, plus any sanitized error
+  code/message (for example Prisma P1001 or P1012). Never include a connection
+  string or secret in the output you share.
+- If db:seed reports that the admin already exists, say so; the password needs
+  a separate reset rather than another seed run.
+- Share the exact localhost port printed by Next.js and the HTTP status from
+  the next login attempt.
+
+No database schema push or seed completed during diagnosis. The current
+database still needs initialization before admin login can work.

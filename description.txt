@@ -1,0 +1,190 @@
+SEMEK QR Verification - Changelog
+====================================
+
+2026-09-29 - Backend Integration Wave (Supabase + Resend + Cloudinary + QR)
+============================================================================
+
+NEW FILES CREATED
+-----------------
+- lib/cloudinary.ts                Cloudinary server-side upload module (base64 data URI, 5 MB limit,
+                                   PNG/JPEG/JPG/WEBP/GIF MIME guard, folder support)
+- lib/qrcode.ts                    QR generation module (generateQRDataUrl / generateQRSvg /
+                                   generateQRBuffer; content encodes `/verify?code=<CODE>` URL;
+                                   size clamped [64..1024])
+- app/api/upload/route.ts          Admin-protected (OPERATIONS+) POST endpoint; Zod validates the
+                                   payload via uploadSchema; calls uploadImageFromBase64; returns
+                                   { url, publicId, width, height } with 201.
+- app/api/qrcode/route.ts          Public GET endpoint: ?code=X&format=png|svg&size=N; validates
+                                   code exists in DB; returns image/png (1y immutable cache) or
+                                   image/svg+xml.
+- .trae/specs/spec.md              Approved requirements spec: 10 rule ACs + 3 rubric ACs,
+                                   FR-1..FR-6, security/performance/maintainability NFRs.
+- .trae/specs/tasks.md             Approved 11-task dependency-ordered implementation queue.
+- app/api/news/[id]/feedback/route.ts   Feedback route relocated (consistent slug naming).
+
+FILES MODIFIED (purpose only)
+------------------------------
+- .env.local                       Rewrote with Supabase URL/publishable/secret, Resend API key,
+                                   Cloudinary cloud_name/api_key/api_secret, DATABASE_URL template
+                                   (Supabase pooler pgbouncer), plus preserved session/QR/admin
+                                   keys and existing email-from/company keys.
+- .env.example                     Rewrote with NEW variable names only (no values) mirroring the
+                                   production .env.local layout.
+- prisma/schema.prisma             datasource.provider changed "sqlite" -> "postgresql"; added
+                                   AuditLog.user AdminUser? opposite-relation field required by
+                                   Postgres strictness.
+- lib/auth.ts                      SessionPayload gained `[key: string]: unknown` index signature
+                                   for newer `jose` JWTPayload assignment compatibility.
+- lib/validation.ts                Added `uploadSchema` (Zod: image string, folder optional) and
+                                   exported `UploadInput` inferred type.
+- lib/email.ts                     SendGrid (`@sendgrid/mail`) fully replaced with Resend
+                                   (`resend` package); public signature unchanged
+                                   (sendMail/sendPasswordReset/sendWelcomeToCompany/
+                                    sendVerificationNotification/sendFeedbackToCompany);
+                                   missing-key => graceful return { ok:false, skipped:true }.
+- lib/api/hooks.ts                 13× paginated/session `UseQueryOptions<..., unknown[]>`
+                                   upgraded to `readonly unknown[]` for @tanstack/react-query v5
+                                   generic drift; 18× forwarded onSuccess(data,vars,ctx) now
+                                   passes 4th argument `{}` as `info` to match new callback shape.
+- app/api/batches/route.ts         `import type { Prisma }` -> `import { Prisma }` so
+                                   Prisma.validator<Args>(value-import) works at runtime.
+- app/api/batches/[id]/route.ts    Same Prisma value-import fix as batches/route.ts.
+- app/api/codes/route.ts           Same Prisma value-import fix as batches/route.ts.
+- app/api/codes/[id]/route.ts      Same Prisma value-import fix as batches/route.ts.
+- app/api/qrcode/route.ts          PNG response buffer cast to `BodyInit` for strict NextResponse
+                                   constructor typing.
+- app/api/codes/generate/route.ts  Added appConfig import, MAX_RETURNED_CODES=200, buildQrUrl()
+                                   helper; response changed from { count, ids } to
+                                   { count, codes: [{ code, qrUrl }] } capped to 200; batch
+                                   counter increment preserved.
+- components/ui/input.tsx          Moved React.useId() out of short-circuit expression; renamed
+                                   `inputId = id || autoId` to fix `react-hooks/rules-of-hooks`
+                                   lint.
+- components/ui/select.tsx         Same conditional-hook fix as input.tsx.
+- components/ui/textarea.tsx       Same conditional-hook fix as input.tsx.
+
+FILES REMOVED
+-------------
+- app/api/news/[postId]/feedback/route.ts  Superseded by app/api/news/[id]/feedback/route.ts
+                                 (resolves Next.js App Router slug conflict).
+
+ENVIRONMENT VARIABLES ADDED
+----------------------------
+NEXT_PUBLIC_SUPABASE_URL
+NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY
+SUPABASE_SECRET_KEY
+DATABASE_URL            (Supabase Postgres pgbouncer pooler template; user must replace password)
+RESEND_API_KEY
+CLOUDINARY_CLOUD_NAME
+CLOUDINARY_API_KEY
+CLOUDINARY_API_SECRET
+
+PACKAGES ADDED
+---------------
+resend
+cloudinary
+qrcode
+@types/qrcode          (devDependency)
+
+PACKAGES REMOVED
+-----------------
+@sendgrid/mail
+
+VERIFICATION SCRIPTS
+---------------------
+npm run typecheck   => passed   (tsc --noEmit exit 0)
+npm run build       => passed   (prisma generate + next build exit 0; all 28 routes compiled)
+npm run lint        => passed   (next lint 0 warnings, 0 errors)
+npx prisma generate => passed   (Prisma Client 5.22.0 generated against postgresql provider)
+
+NEXT STEPS FOR USER
+--------------------
+1. In .env.local, replace YOUR_SUPABASE_DB_PASSWORD in DATABASE_URL with the real Postgres
+   password found in the Supabase project Dashboard -> Settings -> Database -> Password.
+2. Push the schema to Supabase:    npx prisma db push
+3. Seed the initial admin account: npm run db:seed
+4. Start dev server:               npm run dev
+
+2026-09-29 - Missing Pages + 404 Error Fix Wave (Public Routes + Admin Login)
+==============================================================================
+
+NEW FILES CREATED
+-----------------
+- app/complaints/page.tsx              Public complaint submission form (react-hook-form + zod
+                                       complaintSchema); fields: fullName, email, phone, category,
+                                       subject, message, productId, batchNumber, verificationCode,
+                                       consentAcknowledged; uses useCreateComplaint hook;
+                                       post-submit success screen with reference number +
+                                       /complaints/track deep-link.
+- app/complaints/track/page.tsx        Public complaint tracker; form with reference + email via
+                                       useTrackComplaint hook; renders STATUS_TIMELINE (all 7
+                                       ComplaintStatus values), status Badge with complaintBadge()
+                                       class helper, submittedAt, statusMessage, complaint details.
+- app/news/page.tsx                    Public news listing; useNews({status: PUBLISHED implicit
+                                       by backend public filtering}) with debounced search,
+                                       9-per-page grid, featured images, Pagination, total count.
+- app/news/[slug]/page.tsx             Public news detail; reads [slug] param, client-filters
+                                       useNews() list by slug; renders article with featured image,
+                                       excerpt, full content; embedded feedback form using
+                                       useCreateFeedback(postId) hook + feedbackSchema.
+- app/products/page.tsx                Public products listing; useProducts({status: ACTIVE
+                                       implicit by backend public filtering}) with debounced
+                                       search, 12-per-page grid, SKU badge, type/size metadata,
+                                       verify-code CTA per product.
+- app/contact/page.tsx                 Public contact form; react-hook-form + zod contactSchema
+                                       (fullName, email, phone, subject, message); uses
+                                       useCreateContact hook; post-submit success screen with
+                                       company contact info sidebar + quick links.
+- app/admin/login/page.tsx             Admin sign-in page; react-hook-form + zod loginSchema;
+                                       uses useLogin hook; reads ?next= query param (protected
+                                       by middleware.ts) and router.push()'s after 300ms delay;
+                                       shows hint with seeded admin@semek.com.
+- app/admin/page.tsx                   Admin dashboard landing page; useSession() + conditional
+                                       useDashboardMetrics(); 8 MetricCard tiles (products,
+                                       batches, QR codes, scans, complaints, etc.); role-gated
+                                       NAV_ITEMS grid with 12 module links (AUDITOR/OPERATIONS/
+                                       ADMIN hierarchy); built-in logout button + public links.
+
+FILES MODIFIED (purpose only)
+------------------------------
+- components/ui/input.tsx              Added optional leftIcon/rightIcon React.ReactNode props;
+                                       wraps <input> in position:relative div; pl-12 / pr-12
+                                       padding classes applied conditionally.
+- app/verify/page.tsx                  Status badges changed Badge color="" -> variant="" to
+                                       match component API; productionDate wrapped with nullish
+                                       guard before new Date() (fixes strict TS2769).
+- app/api/products/route.ts            GET /api/products is now PUBLIC (same pattern as news
+                                       GET): uses getCurrentSession() + role hierarchy; unauth
+                                       requests are filtered to status=ACTIVE automatically;
+                                       authenticated AUDITOR+ can pass status= param normally.
+- lib/validation.ts                    contactSchema field `name` -> `fullName`, added
+                                       optional `phone` (max 30, trim, optional-or-empty-string)
+                                       for consistency with complaintSchema / CreateContactInput.
+- app/api/contact/route.ts             POST body now mapped from parsed.data.fullName and
+                                       phone (passed through to email handler); no longer
+                                       references removed `name` field.
+- lib/email.ts                         sendContactFormToCompany() params updated:
+                                       { name, email, ... } -> { fullName, email, phone?, ... };
+                                       HTML template renders Phone row when provided;
+                                       replyToName set to fullName (was `name`).
+- .trae/documents/fix_404_and_errors_plan.md  Implementation plan for this wave.
+
+VERIFICATION SCRIPTS
+---------------------
+npm run typecheck   => run after fixes   (tsc --noEmit)
+npm run lint        => run after fixes   (next lint)
+npm run build       => run after fixes   (prisma generate + next build)
+npm run dev         => start server, visit: /, /verify, /complaints, /complaints/track,
+                       /news, /products, /contact, /admin/login, /admin (after login)
+
+ROUTES THAT NO LONGER RETURN 404
+---------------------------------
+GET /complaints             Public complaint form (HTTP 200)
+GET /complaints/track       Public complaint tracker (HTTP 200)
+GET /news                   News listing (HTTP 200)
+GET /news/:slug             News article by slug (HTTP 200; shows 404 card if slug unknown)
+GET /products               Public product catalogue (HTTP 200)
+GET /contact                Contact form (HTTP 200)
+GET /admin/login            Admin login (HTTP 200; middleware skips auth for this path)
+GET /admin                  Admin dashboard (HTTP 200; middleware redirects to /admin/login if 401)
+

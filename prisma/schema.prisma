@@ -1,0 +1,345 @@
+// =============================================================================
+// SEMEK QR Verification — Prisma Schema
+// -----------------------------------------------------------------------------
+// PostgreSQL on Supabase (managed). Connection string must be set via
+// DATABASE_URL env var pointing at the Supabase pooler:
+//   postgresql://postgres:<DB_PASSWORD>@<PROJECT_REF>.supabase.co:6543/postgres?pgbouncer=true
+// For direct-connect migrations (prisma db push / prisma migrate), use port 5432:
+//   postgresql://postgres:<DB_PASSWORD>@<PROJECT_REF>.supabase.co:5432/postgres
+// =============================================================================
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+// -----------------------------------------------------------------------------
+// 1. Admin Users & RBAC
+// -----------------------------------------------------------------------------
+
+model AdminUser {
+  id           String   @id @default(cuid())
+  email        String   @unique
+  fullName     String
+  passwordHash String
+  role         AdminRole @default(OPERATIONS)
+  status       AdminUserStatus @default(ACTIVE)
+  lastLoginAt  DateTime?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  auditLogs    AuditLog[]
+
+  @@index([email])
+  @@index([role])
+}
+
+enum AdminRole {
+  ADMIN
+  OPERATIONS
+  AUDITOR
+}
+
+enum AdminUserStatus {
+  ACTIVE
+  INACTIVE
+}
+
+// -----------------------------------------------------------------------------
+// 2. Products & Batches
+// -----------------------------------------------------------------------------
+
+model Product {
+  id          String   @id @default(cuid())
+  name        String
+  type        String   // e.g. "Table Water", "Sachet Water"
+  size        String?  // e.g. "75cl", "50cl", "500ml Sachet"
+  sku         String   @unique
+  description String?
+  imageUrl    String?
+  status      ProductStatus @default(ACTIVE)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  batches     Batch[]
+  qrCodes     QRCode[]
+  scans       ScanEvent[]
+  complaints  Complaint[]
+
+  @@index([status])
+}
+
+enum ProductStatus {
+  ACTIVE
+  INACTIVE
+  DRAFT
+}
+
+model Batch {
+  id             String   @id @default(cuid())
+  number         String   @unique
+  productId      String
+  product        Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  productionDate DateTime
+  expiryDate     DateTime?
+  quantity       Int
+  generatedCodes Int      @default(0)
+  status         BatchStatus @default(ACTIVE)
+  createdAt      DateTime @default(now())
+
+  qrCodes        QRCode[]
+  scans          ScanEvent[]
+
+  @@index([productId])
+  @@index([status])
+}
+
+enum BatchStatus {
+  ACTIVE
+  COMPLETED
+  REVOKED
+}
+
+// -----------------------------------------------------------------------------
+// 3. QR Codes
+// -----------------------------------------------------------------------------
+
+model QRCode {
+  id             String   @id @default(cuid())
+  code           String   @unique
+  tokenHash      String   // backend-signed token hash, NEVER exposed to browser
+  productId      String
+  product        Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  batchId        String?
+  batch          Batch?   @relation(fields: [batchId], references: [id], onDelete: SetNull)
+  status         QRCodeStatus @default(ACTIVE)
+  scanCount      Int      @default(0)
+  firstScannedAt DateTime?
+  lastScannedAt  DateTime?
+  expiresAt      DateTime?
+  createdAt      DateTime @default(now())
+
+  scans          ScanEvent[]
+
+  @@index([code])
+  @@index([productId])
+  @@index([batchId])
+  @@index([status])
+}
+
+enum QRCodeStatus {
+  ACTIVE
+  REVOKED
+  EXPIRED
+  USED
+}
+
+// -----------------------------------------------------------------------------
+// 4. Verification / Scan events
+// -----------------------------------------------------------------------------
+
+model ScanEvent {
+  id            String             @id @default(cuid())
+  timestamp     DateTime           @default(now())
+  codeId        String
+  qrCode        QRCode             @relation(fields: [codeId], references: [id], onDelete: Cascade)
+  code          String
+  productId     String
+  product       Product            @relation(fields: [productId], references: [id], onDelete: Cascade)
+  batchId       String?
+  batch         Batch?             @relation(fields: [batchId], references: [id], onDelete: SetNull)
+  result        VerificationStatus
+  riskLevel     RiskLevel?         @default(LOW)
+  country       String?
+  city          String?
+  deviceType    String?
+  userAgent     String?
+  ipHash        String?            // privacy-first: store salted hash only
+}
+
+enum VerificationStatus {
+  VALID
+  SUSPICIOUS
+  INVALID
+  REVOKED
+  EXPIRED
+}
+
+enum RiskLevel {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+// -----------------------------------------------------------------------------
+// 5. Alerts (suspicious activity)
+// -----------------------------------------------------------------------------
+
+model Alert {
+  id          String        @id @default(cuid())
+  type        AlertType
+  severity    AlertSeverity
+  status      AlertStatus   @default(OPEN)
+  title       String
+  description String
+  productId   String?
+  batchId     String?
+  codeId      String?
+  metadata    String?       // JSON-stringified
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  @@index([status])
+  @@index([severity])
+}
+
+enum AlertType {
+  EXCESSIVE_SCANS
+  GEO_INCONSISTENCY
+  BURST_ACTIVITY
+  INVALID_ENUMERATION
+  REVOKED_CODE_SCAN
+  CUSTOMER_REPORT
+  OTHER
+}
+
+enum AlertSeverity {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+enum AlertStatus {
+  OPEN
+  INVESTIGATING
+  RESOLVED
+}
+
+// -----------------------------------------------------------------------------
+// 6. Complaints
+// -----------------------------------------------------------------------------
+
+model Complaint {
+  id               String           @id @default(cuid())
+  reference        String           @unique
+  fullName         String
+  email            String
+  phone            String?
+  category         ComplaintCategory
+  subject          String
+  message          String
+  productId        String?
+  product          Product?         @relation(fields: [productId], references: [id], onDelete: SetNull)
+  batchNumber      String?
+  verificationCode String?
+  status           ComplaintStatus  @default(SUBMITTED)
+  statusMessage    String?
+  submittedAt      DateTime         @default(now())
+  lastUpdatedAt    DateTime         @updatedAt
+
+  @@index([reference])
+  @@index([email])
+  @@index([status])
+}
+
+enum ComplaintCategory {
+  PRODUCT_QUALITY
+  SUSPECTED_COUNTERFEIT
+  PACKAGING
+  DISTRIBUTION
+  CUSTOMER_SERVICE
+  VERIFICATION_PROBLEM
+  OTHER
+}
+
+enum ComplaintStatus {
+  SUBMITTED
+  RECEIVED
+  UNDER_REVIEW
+  IN_PROGRESS
+  AWAITING_CUSTOMER
+  RESOLVED
+  CLOSED
+}
+
+// -----------------------------------------------------------------------------
+// 7. News CMS
+// -----------------------------------------------------------------------------
+
+model NewsPost {
+  id               String     @id @default(cuid())
+  slug             String     @unique
+  title            String
+  excerpt          String
+  content          String
+  featuredImageUrl String?
+  status           NewsStatus @default(DRAFT)
+  authorName       String?
+  publishedAt      DateTime?
+  createdAt        DateTime   @default(now())
+  updatedAt        DateTime   @updatedAt
+
+  feedback         Feedback[]
+
+  @@index([slug])
+  @@index([status])
+}
+
+enum NewsStatus {
+  DRAFT
+  PUBLISHED
+  ARCHIVED
+}
+
+// -----------------------------------------------------------------------------
+// 8. Customer Feedback (moderated)
+// -----------------------------------------------------------------------------
+
+model Feedback {
+  id         String         @id @default(cuid())
+  newsPostId String
+  newsPost   NewsPost       @relation(fields: [newsPostId], references: [id], onDelete: Cascade)
+  name       String
+  email      String
+  message    String
+  status     FeedbackStatus @default(PENDING)
+  createdAt  DateTime       @default(now())
+  moderatedAt DateTime?
+
+  @@index([newsPostId])
+  @@index([status])
+}
+
+enum FeedbackStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+// -----------------------------------------------------------------------------
+// 9. Audit Logs
+// -----------------------------------------------------------------------------
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  userId     String?
+  user       AdminUser? @relation(fields: [userId], references: [id], onDelete: SetNull)
+  userEmail  String
+  action     String
+  entity     String
+  reference  String?
+  summary    String
+  metadata   String?  // JSON
+  timestamp  DateTime @default(now())
+
+  @@index([userId])
+  @@index([entity])
+  @@index([timestamp])
+}
