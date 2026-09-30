@@ -1,6 +1,7 @@
 import { httpStatusMessage } from "@/lib/utils";
 
-const BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3000/api";
+// const BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:3000/api";
+const BASE_URL = process.env.NEXT_PUBLIC_API_URL || "/api";
 
 export async function apiFetch<T>(
   path: string,
