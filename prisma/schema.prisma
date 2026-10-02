@@ -34,6 +34,7 @@ model AdminUser {
   updatedAt    DateTime @updatedAt
 
   auditLogs    AuditLog[]
+  generatedQrCodes AdminGeneratedQRCode[]
 
   @@index([email])
   @@index([role])
@@ -137,6 +138,27 @@ enum QRCodeStatus {
   REVOKED
   EXPIRED
   USED
+}
+
+model AdminGeneratedQRCode {
+  id          String   @id @default(uuid()) @db.Uuid
+  code        String   @unique
+  data        String
+  status      AdminGeneratedQRCodeStatus @default(VALID)
+  generatedBy String   @map("generated_by")
+  admin       AdminUser @relation(fields: [generatedBy], references: [id], onDelete: Restrict)
+  createdAt   DateTime @default(now()) @map("created_at")
+  expiresAt   DateTime? @map("expires_at")
+
+  @@map("qr_codes")
+  @@index([status])
+  @@index([generatedBy])
+}
+
+enum AdminGeneratedQRCodeStatus {
+  VALID   @map("valid")
+  USED    @map("used")
+  EXPIRED @map("expired")
 }
 
 // -----------------------------------------------------------------------------

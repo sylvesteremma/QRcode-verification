@@ -20,6 +20,25 @@ export async function POST(request: Request) {
     const code = extractVerificationCode(parsed.data.code);
     const now = new Date();
 
+    // Admin generated label codes live in their own table. Check this source
+    // first so existing scanners verify these codes against persisted status.
+    const adminCode = await prisma.adminGeneratedQRCode.findUnique({ where: { code } });
+    if (adminCode) {
+      const expired = adminCode.status === "EXPIRED" || !!adminCode.expiresAt && adminCode.expiresAt <= now;
+      const valid = adminCode.status === "VALID" && !expired;
+      return NextResponse.json({
+        status: valid ? "VALID" : expired ? "EXPIRED" : "INVALID",
+        verificationId: adminCode.id,
+        code,
+        product: valid ? { id: adminCode.id, name: adminCode.data, type: "Verified QR data", sku: "" } : null,
+        batch: null,
+        verifiedAt: now.toISOString(),
+        scanCount: 0,
+        firstScannedAt: null,
+        message: valid ? `Valid Code — ${adminCode.data}` : "Invalid / Not Generated From This System",
+      });
+    }
+
     const qr = await prisma.qRCode.findUnique({
       where: { code },
       include: { product: true, batch: true },
@@ -33,8 +52,7 @@ export async function POST(request: Request) {
 
     if (!qr) {
       status = "INVALID";
-      message =
-        "This verification code was not found in our system. Please double-check the code or scan the QR code again.";
+      message = "Invalid / Not Generated From This System";
       riskLevel = "HIGH";
       riskReason = "Unknown code";
       recommendation =

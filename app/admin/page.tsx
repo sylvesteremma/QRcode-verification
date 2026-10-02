@@ -54,6 +54,7 @@ const NAV_ITEMS: NavItem[] = [
     minRole: "AUDITOR",
   },
   { label: "QR Codes", href: "/admin/codes", icon: QrCode, minRole: "AUDITOR" },
+  { label: "QR Generator", href: "/admin/qr-codes", icon: QrCode, minRole: "ADMIN" },
   { label: "Scans", href: "/admin/scans", icon: ScanLine, minRole: "AUDITOR" },
   {
     label: "Alerts",

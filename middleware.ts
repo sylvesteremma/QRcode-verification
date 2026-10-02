@@ -14,11 +14,11 @@ function getSecret(): Uint8Array {
   return new TextEncoder().encode(raw);
 }
 
-async function validateToken(token: string | undefined) {
+async function validateToken(token: string | undefined, adminOnly = false) {
   if (!token) return false;
   try {
-    await jwtVerify(token, getSecret(), { issuer: "semek" });
-    return true;
+    const { payload } = await jwtVerify(token, getSecret(), { issuer: "semek" });
+    return !adminOnly || payload.role === "ADMIN";
   } catch {
     return false;
   }
@@ -32,7 +32,7 @@ export async function middleware(request: NextRequest) {
   if (PUBLIC_ADMIN_ROUTES.some((r) => pathname === r)) return NextResponse.next();
 
   const token = request.cookies.get(COOKIE_NAME)?.value;
-  const ok = await validateToken(token);
+  const ok = await validateToken(token, pathname === "/admin/qr-codes" || pathname.startsWith("/admin/qr-codes/"));
   if (ok) return NextResponse.next();
 
   const loginUrl = new URL("/admin/login", request.url);
